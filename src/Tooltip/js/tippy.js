@@ -4,7 +4,6 @@ import {
   Selectors,
   Defaults
 } from './core/globals'
-import ReactDOM from 'react-dom'
 
 import init from './core/init'
 
@@ -21,6 +20,7 @@ import getInnerElements        from './utils/getInnerElements'
 import applyTransitionDuration from './utils/applyTransitionDuration'
 import isVisible               from './utils/isVisible'
 import noop                    from './utils/noop'
+import isObjectLiteral         from './utils/isObjectLiteral'
 
 /* Core library functions */
 import followCursorHandler from './core/followCursorHandler'
@@ -104,49 +104,6 @@ class Tippy {
   }
 
   /**
-  * Update settings
-  * @param {DOMElement} - popper
-  * @param {string} - name
-  * @param {string} - value
-  */
-
-  updateSettings(popper, name, value) {
-    const data = find(this.store, data => data.popper === popper)
-    const newSettings = {
-      ...data.settings,
-      [name]: value,
-    }
-    data.settings = newSettings;
-  };
-
-  /**
-  * Update for React
-  * @param {DOMElement} - popper
-  * @param {ReactElement} - content
-  */
-  updateForReact(popper, updatedContent) {
-    const tooltipContent = popper.querySelector(Selectors.CONTENT)
-    const data = find(this.store, data => data.popper === popper)
-
-    const {
-      useContext,
-      reactInstance,
-    } = data.settings;
-    if (useContext) {
-      ReactDOM.unstable_renderSubtreeIntoContainer(
-        data.settings.reactInstance,
-        updatedContent,
-        tooltipContent,
-      );
-    } else {
-      ReactDOM.render(
-        updatedContent,
-        tooltipContent,
-      );
-    }
-
-  }
-  /**
   * Shows a popper
   * @param {Element} popper
   * @param {Number} customDuration (optional)
@@ -157,22 +114,13 @@ class Tippy {
     const data = find(this.store, data => data.popper === popper)
     const { tooltip, circle, content } = getInnerElements(popper)
 
-    if (!document.body.contains(data.el)) {
+    // Destroy popper if its reference is no longer on the DOM (excluding refObjs)
+    if (!this.selector.refObj && !document.body.contains(data.el)) {
       this.destroy(popper)
       return
     }
 
     this.callbacks.show.call(popper)
-
-    // Custom react
-    if (data && data.settings && data.settings.open === false) {
-      return;
-    }
-
-    if (data.settings.reactDOM) {
-      this.updateForReact(popper, data.settings.reactDOM)
-    }
-    // end: Custom react
 
     const {
       el,
@@ -182,18 +130,9 @@ class Tippy {
         interactive,
         followCursor,
         flipDuration,
-        duration,
-        dynamicTitle
+        duration
       }
     } = data
-
-    if (dynamicTitle) {
-      const title = el.getAttribute('title')
-      if (title) {
-        content.innerHTML = title
-        removeTitle(el)
-      }
-    }
 
     const _duration = customDuration !== undefined
       ? customDuration
@@ -209,6 +148,8 @@ class Tippy {
 
     // Wait for popper's position to update
     defer(() => {
+      if (!isVisible(popper)) return
+
       // Sometimes the arrow will not be in the correct position, force another update
       if (!followCursor || Browser.touch) {
         data.popperInstance.update()
@@ -264,15 +205,6 @@ class Tippy {
 
     const data = find(this.store, data => data.popper === popper)
     const { tooltip, circle, content } = getInnerElements(popper)
-
-    // custom react
-    // Prevent hide if open
-    if (data.settings.disabled === false && data.settings.open) {
-      return;
-    }
-
-    const isUnmount = data && data.settings && data.settings.unmountHTMLWhenHide && data.settings.reactDOM;
-    // end: custom react
 
     const {
       el,
@@ -331,11 +263,6 @@ class Tippy {
       appendTo.removeChild(popper)
 
       this.callbacks.hidden.call(popper)
-
-      // custom react
-      if (isUnmount) {
-        ReactDOM.unmountComponentAtNode(content);
-      }
     })
   }
 
@@ -376,7 +303,7 @@ class Tippy {
       el,
       popperInstance,
       listeners,
-      _mutationObserver
+      _mutationObservers
     } = data
 
     // Ensure the popper is hidden
@@ -395,7 +322,10 @@ class Tippy {
     el.removeAttribute('aria-describedby')
 
     popperInstance && popperInstance.destroy()
-    _mutationObserver && _mutationObserver.disconnect()
+
+    _mutationObservers.forEach(observer => {
+      observer && observer.disconnect()
+    })
 
     // Remove from store
     Store.splice(findIndex(Store, data => data.popper === popper), 1)
@@ -424,6 +354,31 @@ class Tippy {
 }
 
 function tippy(selector, settings) {
+  // Create a virtual object for custom positioning
+  if (isObjectLiteral(selector)) {
+    selector = {
+      refObj: true,
+      attributes: selector.attributes || {},
+      getBoundingClientRect: selector.getBoundingClientRect,
+      clientWidth: selector.clientWidth,
+      clientHeight: selector.clientHeight,
+      setAttribute: (key, val) => { selector.attributes[key] = val },
+      getAttribute: key => selector.attributes[key],
+      removeAttribute: key => { delete selector.attributes[key] },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      classList: {
+        classNames: {},
+        add: key => { selector.classList.classNames[key] = true },
+        remove: key => {
+          selector.classList.classNames[key] = false
+          return true
+        },
+        contains: key => !!selector.classList.classNames[key]
+      }
+    }
+  }
+
   return new Tippy(selector, settings)
 }
 
